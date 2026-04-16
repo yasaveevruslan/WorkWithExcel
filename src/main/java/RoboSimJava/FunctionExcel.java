@@ -7,6 +7,7 @@ import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.*;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class FunctionExcel {
@@ -52,33 +53,53 @@ public class FunctionExcel {
             }
         }
     }
+    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("dd.MM.yyyy");
 
     private static Object getCellValue(Cell cell, DataFormatter formatter, FormulaEvaluator evaluator) {
+        if (cell == null) return "";
+
         switch (cell.getCellType()) {
             case STRING:
                 return cell.getStringCellValue();
-            case NUMERIC:
+
+            case NUMERIC: {
                 if (DateUtil.isCellDateFormatted(cell)) {
-                    return cell.getDateCellValue();
+                    // ФОРМАТИРУЕМ ДАТУ В СТРОКУ
+                    Date date = cell.getDateCellValue();
+                    return DATE_FORMAT.format(date);
                 }
                 double num = cell.getNumericCellValue();
                 return num == (long) num ? (long) num : num;
+            }
             case BOOLEAN:
                 return cell.getBooleanCellValue();
-            case FORMULA:
+
+            case FORMULA: {
                 try {
                     CellValue cv = evaluator.evaluate(cell);
                     switch (cv.getCellType()) {
-                        case NUMERIC: return cv.getNumberValue();
-                        case STRING: return cv.getStringValue();
-                        case BOOLEAN: return cv.getBooleanValue();
-                        default: return cell.getCellFormula();
+                        case NUMERIC:
+                            // Проверяем, не дата ли это в формуле
+                            if (DateUtil.isCellDateFormatted(cell)) {
+                                Date date = cell.getDateCellValue();
+                                return DATE_FORMAT.format(date);
+                            }
+                            double num = cv.getNumberValue();
+                            return num == (long) num ? (long) num : num;
+                        case STRING:
+                            return cv.getStringValue();
+                        case BOOLEAN:
+                            return cv.getBooleanValue();
+                        default:
+                            return cell.getCellFormula();
                     }
                 } catch (Exception e) {
                     return cell.getCellFormula();
                 }
+            }
             case BLANK:
                 return "";
+
             default:
                 return formatter.formatCellValue(cell);
         }
@@ -98,6 +119,9 @@ public class FunctionExcel {
             workbook = new XSSFWorkbook();
         }
 
+        if (nameList.isEmpty()) {
+            nameList = "Лист";
+        }
         String uniqueSheetName = getUniqueSheetName(workbook, nameList);
         XSSFSheet newSheet = workbook.createSheet(uniqueSheetName);
         writeDataToSheet(newSheet, dates);
