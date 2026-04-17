@@ -5,6 +5,7 @@ import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Map;
 
 public class FunctionComponent {
@@ -54,6 +55,9 @@ public class FunctionComponent {
         columns[0] = "№";
         for (int i = 0; i < maxCols; i++) {
             columns[i + 1] = getColumnLetter(i);
+            if (!CreateWindow.namesColumnsExcel.contains(getColumnLetter(i))) {
+                CreateWindow.namesColumnsExcel.add(getColumnLetter(i));
+            }
         }
         tableModel.setColumnIdentifiers(columns);
 
