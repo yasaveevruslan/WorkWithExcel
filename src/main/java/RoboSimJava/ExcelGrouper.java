@@ -17,7 +17,7 @@ public class ExcelGrouper {
         private final Object[] allData;
         private final double value1;
         private final double value2;
-        private Integer year;        // Год из даты
+        private Integer year;
 
         public DataRow(String groupName, Object[] allData, double value1, double value2) {
             this.groupName = groupName;
@@ -33,7 +33,6 @@ public class ExcelGrouper {
         public Integer getYear() { return year; }
 
         public void setDate(Date date) {
-            // Дата для группировки по годам
             if (date != null) {
                 Calendar cal = Calendar.getInstance();
                 cal.setTime(date);
@@ -42,7 +41,6 @@ public class ExcelGrouper {
         }
     }
 
-    // Группа по годам (внутренняя группировка)
     public static class YearGroup {
         private final int year;
         private final List<DataRow> rows = new ArrayList<>();
@@ -64,7 +62,6 @@ public class ExcelGrouper {
         public int getRowCount() { return rows.size(); }
     }
 
-    // Основная группа (по названию)
     public static class DataGroup {
         private final String name;
         private final Map<Integer, YearGroup> yearGroups = new LinkedHashMap<>();
@@ -78,7 +75,7 @@ public class ExcelGrouper {
         public void addRow(DataRow row, double value) {
             Integer year = row.getYear();
             if (year == null) {
-                year = 0; // Группа "Без даты"
+                year = 0;
             }
 
             YearGroup yearGroup = yearGroups.computeIfAbsent(year, YearGroup::new);
@@ -101,7 +98,7 @@ public class ExcelGrouper {
         public int totalColumns;
         public List<String> sheetNames;
         public String selectedSheetName;
-        public int dateColumnIndex = -1; // Индекс колонки с датой
+        public int dateColumnIndex = -1;
 
         public ExcelData() {
             this.rows = new ArrayList<>();
@@ -120,9 +117,7 @@ public class ExcelGrouper {
             for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
                 data.sheetNames.add(workbook.getSheetName(i));
             }
-
         }
-
         return data;
     }
 
@@ -134,9 +129,6 @@ public class ExcelGrouper {
 
     // ==================== МЕТОД 2: ЧТЕНИЕ ВЫБРАННОГО ЛИСТА ====================
 
-    /**
-     * Чтение листа с указанием колонки даты для группировки по годам
-     */
     public static void readSelectedSheet(String filePath,
                                          ExcelData data,
                                          int groupNameColumnIndex,
@@ -194,7 +186,6 @@ public class ExcelGrouper {
 
                 DataRow dataRow = new DataRow(groupName, rowData, value1, value2);
 
-                // Читаем дату, если указана
                 if (dateColumnIndex >= 0) {
                     Cell dateCell = row.getCell(dateColumnIndex);
                     Date date = getDateValue(dateCell, formatter, evaluator);
@@ -203,7 +194,99 @@ public class ExcelGrouper {
 
                 data.rows.add(dataRow);
             }
+        }
+    }
 
+    public static void readSelectedSheetWithProgress(String filePath,
+                                                     ExcelData data,
+                                                     int groupNameColumnIndex,
+                                                     int valueColumn1Index,
+                                                     int valueColumn2Index,
+                                                     int dateColumnIndex,
+                                                     ProgressDialog progressDialog) throws IOException, InterruptedException {
+
+        data.dateColumnIndex = dateColumnIndex;
+        data.rows.clear();
+
+        try (FileInputStream fis = new FileInputStream(filePath);
+             Workbook workbook = WorkbookFactory.create(fis)) {
+
+            Sheet sheet;
+            if (data.selectedSheetName != null) {
+                sheet = workbook.getSheet(data.selectedSheetName);
+            } else {
+                sheet = workbook.getSheetAt(0);
+                data.selectedSheetName = sheet.getSheetName();
+            }
+
+            DataFormatter formatter = new DataFormatter();
+            FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
+
+            Row firstRow = sheet.getRow(0);
+            data.totalColumns = firstRow != null ? firstRow.getLastCellNum() : 10;
+
+            boolean hasHeader = isHeaderRow(sheet.getRow(0));
+            int startRow = hasHeader ? 1 : 0;
+            int totalRows = sheet.getLastRowNum() - startRow + 1;
+
+            if (hasHeader) {
+                Row headerRow = sheet.getRow(0);
+                data.headers = new Object[data.totalColumns];
+                for (int j = 0; j < data.totalColumns; j++) {
+                    Cell cell = headerRow.getCell(j);
+                    data.headers[j] = getCellValue(cell, formatter, evaluator);
+                }
+            }
+
+            int processedRows = 0;
+            int lastProgress = -1;
+
+            for (int i = startRow; i <= sheet.getLastRowNum(); i++) {
+                if (progressDialog != null && progressDialog.isCancelled()) {
+                    throw new InterruptedException("Операция отменена пользователем");
+                }
+
+                Row row = sheet.getRow(i);
+                if (row == null) continue;
+
+                Cell nameCell = row.getCell(groupNameColumnIndex);
+                String groupName = getCellValueAsString(nameCell, formatter, evaluator);
+                if (groupName.trim().isEmpty()) continue;
+
+                Object[] rowData = new Object[data.totalColumns];
+                for (int j = 0; j < data.totalColumns; j++) {
+                    Cell cell = row.getCell(j);
+                    rowData[j] = getCellValue(cell, formatter, evaluator);
+                }
+
+                double value1 = getNumericValue(row.getCell(valueColumn1Index), formatter, evaluator);
+                double value2 = getNumericValue(row.getCell(valueColumn2Index), formatter, evaluator);
+
+                DataRow dataRow = new DataRow(groupName, rowData, value1, value2);
+
+                if (dateColumnIndex >= 0) {
+                    Cell dateCell = row.getCell(dateColumnIndex);
+                    Date date = getDateValue(dateCell, formatter, evaluator);
+                    dataRow.setDate(date);
+                }
+
+                data.rows.add(dataRow);
+                processedRows++;
+
+                if (progressDialog != null && processedRows % 50 == 0) {
+                    int progress = (int) ((double) processedRows / totalRows * 100);
+                    if (progress != lastProgress) {
+                        progressDialog.setProgress(Math.min(progress, 100));
+                        progressDialog.setStatus("Обработка строки " + processedRows + " из " + totalRows);
+                        lastProgress = progress;
+                    }
+                }
+            }
+
+            if (progressDialog != null && !progressDialog.isCancelled()) {
+                progressDialog.setProgress(100);
+                progressDialog.setStatus("Обработка завершена!");
+            }
         }
     }
 
@@ -249,12 +332,8 @@ public class ExcelGrouper {
         data.rows = cleanedRows;
     }
 
-
     // ==================== МЕТОД 4: СОХРАНЕНИЕ ФАЙЛА С ГРУППИРОВКОЙ ПО ГОДАМ ====================
 
-    /**
-     * Сохранение с двухуровневой группировкой (название -> год)
-     */
     public static void saveGroupedFileWithYears(String outputFilePath,
                                                 ExcelData data,
                                                 String sheet1Name,
@@ -262,19 +341,15 @@ public class ExcelGrouper {
                                                 int valueColumn1Index,
                                                 int valueColumn2Index) throws IOException {
 
-
-        // Группируем данные (основная группа + года)
         Map<String, DataGroup> groups1 = groupByColumnWithYears(data.rows, true);
         Map<String, DataGroup> groups2 = groupByColumnWithYears(data.rows, false);
 
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
 
-            // Лист 1
             createGroupedSheetWithYears(workbook,
                     sheet1Name != null ? sheet1Name : "Столбец 1 (все)",
                     groups1, data.headers, valueColumn1Index);
 
-            // Лист 2
             createGroupedSheetWithYears(workbook,
                     sheet2Name != null ? sheet2Name : "Столбец 2 (без нулей)",
                     groups2, data.headers, valueColumn2Index);
@@ -283,37 +358,21 @@ public class ExcelGrouper {
                 workbook.write(fos);
             }
 
-
-            // Статистика
-            printStatistics(groups1, "Лист 1");
-            printStatistics(groups2, "Лист 2");
         }
     }
 
-    private static void printStatistics(Map<String, DataGroup> groups, String sheetName) {
-        int totalGroups = groups.size();
-        int totalYearGroups = groups.values().stream().mapToInt(DataGroup::getYearGroupCount).sum();
-        int totalRows = groups.values().stream().mapToInt(DataGroup::getTotalRowCount).sum();
-
-        JOptionPane.showMessageDialog(null, sheetName + ": " + totalGroups + " основных групп, " +
-                totalYearGroups + " групп по годам, " + totalRows + " строк");
-    }
-
-    /**
-     * Группировка с учетом годов
-     */
     private static Map<String, DataGroup> groupByColumnWithYears(List<DataRow> allRows, boolean useColumn1) {
         Map<String, DataGroup> groups = new LinkedHashMap<>();
 
         List<DataRow> sortedRows = new ArrayList<>(allRows);
-        // Сортируем по названию, затем по году
         sortedRows.sort(Comparator.comparing(DataRow::getGroupName)
                 .thenComparing(DataRow::getYear, Comparator.nullsLast(Comparator.naturalOrder())));
 
         for (DataRow row : sortedRows) {
             double value = useColumn1 ? row.getValue1() : row.getValue2();
 
-            if (!useColumn1 && value == 0) {
+            // Фильтруем нули для всех листов (и для дебета, и для кредита)
+            if (value == 0) {
                 continue;
             }
 
@@ -324,9 +383,6 @@ public class ExcelGrouper {
         return groups;
     }
 
-    /**
-     * Создание листа с двухуровневой группировкой
-     */
     private static void createGroupedSheetWithYears(XSSFWorkbook workbook,
                                                     String sheetName,
                                                     Map<String, DataGroup> groups,
@@ -343,7 +399,6 @@ public class ExcelGrouper {
 
         int currentRow = 0;
 
-        // Заголовки колонок
         if (headers != null) {
             Row headerRow = sheet.createRow(currentRow++);
             for (int i = 0; i < headers.length; i++) {
@@ -353,13 +408,11 @@ public class ExcelGrouper {
             }
         }
 
-        // Сортируем основные группы
         List<DataGroup> sortedGroups = new ArrayList<>(groups.values());
         sortedGroups.sort(Comparator.comparing(DataGroup::getName));
 
         for (DataGroup group : sortedGroups) {
 
-            // ===== ЗАГОЛОВОК ОСНОВНОЙ ГРУППЫ =====
             Row mainGroupRow = sheet.createRow(currentRow++);
 
             Cell nameCell = mainGroupRow.createCell(0);
@@ -372,16 +425,14 @@ public class ExcelGrouper {
 
             int mainGroupStartRow = currentRow - 1;
 
-            // Сортируем года
             List<YearGroup> sortedYearGroups = new ArrayList<>(group.getYearGroups().values());
             sortedYearGroups.sort(Comparator.comparing(YearGroup::getYear));
 
             for (YearGroup yearGroup : sortedYearGroups) {
 
-                // ===== ЗАГОЛОВОК ГРУППЫ ПО ГОДУ =====
                 Row yearGroupRow = sheet.createRow(currentRow++);
 
-                Cell yearNameCell = yearGroupRow.createCell(1); // С отступом
+                Cell yearNameCell = yearGroupRow.createCell(1);
                 String yearLabel = yearGroup.getYear() == 0 ? "Без даты" : String.valueOf(yearGroup.getYear());
                 yearNameCell.setCellValue(yearLabel + " (" + yearGroup.getRowCount() + " шт.)");
                 yearNameCell.setCellStyle(yearGroupStyle);
@@ -391,8 +442,6 @@ public class ExcelGrouper {
                 yearTotalCell.setCellStyle(totalStyle);
 
                 int yearGroupStartRow = currentRow - 1;
-
-                // ===== ДЕТАЛЬНЫЕ СТРОКИ =====
                 int firstDetailRow = currentRow;
 
                 for (DataRow dataRow : yearGroup.getRows()) {
@@ -408,37 +457,31 @@ public class ExcelGrouper {
 
                 int lastDetailRow = currentRow - 1;
 
-                // Группировка строк внутри года (сворачиваемая)
                 if (lastDetailRow >= firstDetailRow) {
                     sheet.groupRow(firstDetailRow, lastDetailRow);
                     sheet.setRowGroupCollapsed(firstDetailRow, true);
                 }
 
-                // Группировка заголовка года с его строками
                 if (lastDetailRow >= yearGroupStartRow) {
                     sheet.groupRow(yearGroupStartRow + 1, lastDetailRow);
                 }
             }
 
-            // Группировка всей основной группы
             int mainGroupEndRow = currentRow - 1;
             if (mainGroupEndRow > mainGroupStartRow) {
                 sheet.groupRow(mainGroupStartRow + 1, mainGroupEndRow);
-                sheet.setRowGroupCollapsed(mainGroupStartRow, false); // Основная группа развернута
+                sheet.setRowGroupCollapsed(mainGroupStartRow, false);
             }
 
-            // Пустая строка между группами
             currentRow++;
         }
 
-        // Авторазмер колонок
         if (headers != null) {
             for (int i = 0; i < headers.length; i++) {
                 sheet.autoSizeColumn(i);
             }
         }
 
-        // Устанавливаем уровни группировки
         sheet.setRowSumsBelow(false);
     }
 
@@ -518,7 +561,6 @@ public class ExcelGrouper {
             String strValue = formatter.formatCellValue(cell, evaluator);
             if (strValue == null || strValue.trim().isEmpty()) return null;
 
-            // Пробуем разные форматы дат
             String[] patterns = {"dd.MM.yyyy", "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy"};
             for (String pattern : patterns) {
                 try {
@@ -556,7 +598,6 @@ public class ExcelGrouper {
 
             case NUMERIC: {
                 if (DateUtil.isCellDateFormatted(cell)) {
-                    // ФОРМАТИРУЕМ ДАТУ В СТРОКУ
                     Date date = cell.getDateCellValue();
                     return DATE_FORMAT.format(date);
                 }
@@ -571,7 +612,6 @@ public class ExcelGrouper {
                     CellValue cv = evaluator.evaluate(cell);
                     switch (cv.getCellType()) {
                         case NUMERIC:
-                            // Проверяем, не дата ли это в формуле
                             if (DateUtil.isCellDateFormatted(cell)) {
                                 Date date = cell.getDateCellValue();
                                 return DATE_FORMAT.format(date);
@@ -610,13 +650,20 @@ public class ExcelGrouper {
     }
 
     private static void setCellValue(Cell cell, Object value) {
-        switch (value) {
-            case null -> cell.setBlank();
-            case String s -> cell.setCellValue(s);
-            case Number number -> cell.setCellValue(number.doubleValue());
-            case Boolean b -> cell.setCellValue(b);
-            case Date date -> cell.setCellValue(date);
-            default -> cell.setCellValue(value.toString());
+        if (value == null) {
+            cell.setBlank();
+        } else if (value instanceof String) {
+            cell.setCellValue((String) value);
+        } else if (value instanceof Number) {
+            cell.setCellValue(((Number) value).doubleValue());
+        } else if (value instanceof Boolean) {
+            cell.setCellValue((Boolean) value);
+        } else if (value instanceof Date) {
+            cell.setCellValue((Date) value);
+        } else {
+            cell.setCellValue(value.toString());
         }
     }
+
+    
 }

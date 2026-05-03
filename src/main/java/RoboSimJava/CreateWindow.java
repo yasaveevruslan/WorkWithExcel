@@ -5,8 +5,6 @@ import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.awt.Color;
-import java.awt.Font;
 import java.io.*;
 import java.util.*;
 import java.util.List;
@@ -20,8 +18,8 @@ public class CreateWindow extends JFrame {
     private static final Logger logger = Logger.getLogger(CreateWindow.class.getName());
     public static FileHandler fileHandler;
     private static final Map<String, Object[]> data = new LinkedHashMap<>();
-    private static final List<String> namesSheetExcel = new ArrayList<String>();
-    public static ArrayList<String> namesColumnsExcel = new ArrayList<String>();
+    private static final List<String> namesSheetExcel = new ArrayList<>();
+    public static ArrayList<String> namesColumnsExcel = new ArrayList<>();
     private static String nameOpenList;
     private static String directoryOpenFile;
     private static ExcelGrouper.ExcelData information;
@@ -29,6 +27,8 @@ public class CreateWindow extends JFrame {
     private static int debitNumber = 1;
     private static int creditNumber = 2;
     private static int dateNumber = 3;
+
+    private ProgressDialog progressDialog;
 
     public CreateWindow() {
         initializeWindow();
@@ -45,7 +45,7 @@ public class CreateWindow extends JFrame {
     private void initializeWindow() {
         setTitle("Работа с excel");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(700, 600);
+        setSize(800, 600);
         getContentPane().setBackground(new Color(190, 166, 166));
         addComponents();
     }
@@ -80,7 +80,6 @@ public class CreateWindow extends JFrame {
         constraints.gridy = 0;
         constraints.insets = insets;
         panel.add(useListField, constraints);
-
 
         JLabel nameListLabel = new JLabel("Название листа:");
         nameListLabel.setFont(new Font(Font.MONOSPACED, Font.ITALIC, 14));
@@ -175,7 +174,6 @@ public class CreateWindow extends JFrame {
         generate.setFont(fButton);
         panel.add(generate, constraints);
 
-
         JButton openExcel = new JButton("открыть");
         openExcel.setPressedIcon(null);
         openExcel.setContentAreaFilled(false);
@@ -220,7 +218,6 @@ public class CreateWindow extends JFrame {
         saveFile.setFont(fButton);
         panel.add(saveFile, constraints);
 
-
         JPanel mainPanel = new JPanel(new BorderLayout());
         constraints.fill = GridBagConstraints.BOTH;
         constraints.weightx = 1.0;
@@ -258,36 +255,15 @@ public class CreateWindow extends JFrame {
 
     private void actionButtons(JButton openExcel, JComboBox<String> useListField, JButton readFile, JTextArea textArea,
                                DefaultTableModel tableModel, JTable excelTable, JButton clearFile, JButton saveFile,
-                               JTextField nameListField, JComboBox<String> title, JComboBox<String> debit, JComboBox<String> credit, JComboBox<String> date, JButton generate) {
+                               JTextField nameListField, JComboBox<String> title, JComboBox<String> debit,
+                               JComboBox<String> credit, JComboBox<String> date, JButton generate) {
 
         openExcel.addActionListener(e -> {
-            openExcelDirectory();
-            namesSheetExcel.clear();
-            changeBox(useListField, FunctionExcel.readSheet(directoryOpenFile), "выберите лист");
+            openExcelDirectory(useListField);
         });
 
-
         readFile.addActionListener(e -> {
-            try {
-                FunctionExcel.read(nameOpenList, directoryOpenFile, data);
-                ExcelGrouper.selectSheetByName(information, nameOpenList);
-                namesColumnsExcel.clear();
-                textArea.setText("");
-                for (int i = 1; i < data.size() + 1; i++) {
-                    FunctionComponent.displayDataInTable(data, tableModel, excelTable);
-                    FunctionComponent.appendText(textArea, Arrays.toString(data.get("" + i)) + '\n');
-                }
-                changeBox(debit, namesColumnsExcel, "Выберите столбец");
-                changeBox(credit, namesColumnsExcel, "Выберите столбец");
-                changeBox(date, namesColumnsExcel, "Выберите столбец");
-                changeBox(title, namesColumnsExcel, "Выберите столбец");
-            } catch (IOException ex) {
-                logger.severe("Произошла ошибка: открытия файла" + ex.getMessage());
-                fileHandler.publish(new java.util.logging.LogRecord(Level.SEVERE, "Произошла ошибка: " + ex.getMessage()));
-            } catch (InvalidFormatException ex) {
-                logger.severe("Произошла ошибка: чтения файла" + ex.getMessage());
-                fileHandler.publish(new java.util.logging.LogRecord(Level.SEVERE, "Произошла ошибка: " + ex.getMessage()));
-            }
+            readFileWithProgress(textArea, tableModel, excelTable, title, debit, credit, date);
         });
 
         clearFile.addActionListener(e -> {
@@ -306,149 +282,254 @@ public class CreateWindow extends JFrame {
         generate.addActionListener(e -> {
             try {
                 ExcelGrouper.readSelectedSheet(directoryOpenFile, information,
-                                    titleNumber, debitNumber, creditNumber, dateNumber);
+                        titleNumber, debitNumber, creditNumber, dateNumber);
+                ExcelGrouper.cleanData(information);
+                JOptionPane.showMessageDialog(this, "Отчет успешно сгенерирован!", "Успех", JOptionPane.INFORMATION_MESSAGE);
             } catch (IOException ex) {
-                throw new RuntimeException(ex);
+                logger.severe("Ошибка при генерации: " + ex.getMessage());
+                JOptionPane.showMessageDialog(this, "Ошибка при генерации: " + ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
         });
     }
 
-    private static void changeBox(JComboBox<String> box, List<String> list, String text) {
-        List<String> names;
-        box.removeAllItems();
-        names = list;
-        if (!list.contains(text)) list.addFirst(text);
-
-        for (String s : names) {
-            box.addItem(s);
-        }
-        box.setSelectedIndex(0);
-    }
-
-
-    private void openExcelDirectory() {
+    private void openExcelDirectory(JComboBox<String> useListField) {
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ex) {
             logger.severe("Произошла ошибка: открытия окна" + ex.getMessage());
-            fileHandler.publish(new java.util.logging.LogRecord(Level.SEVERE, "Произошла ошибка: " + ex.getMessage()));
         }
 
-        final JFrame frame = new JFrame("Выбрать");
         JFileChooser chooser = FunctionComponent.getFileChooser();
-        if (chooser.showDialog(frame, "Открыть") == JFileChooser.APPROVE_OPTION) {
-            directoryOpenFile = chooser.getSelectedFile().getAbsolutePath();
-            try {
-                information = ExcelGrouper.selectFileAndSheet(directoryOpenFile);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-            JOptionPane.showMessageDialog(null, chooser.getSelectedFile().getName(), "Название файла", JOptionPane.INFORMATION_MESSAGE);
+        if (chooser.showDialog(this, "Открыть") == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = chooser.getSelectedFile();
+            directoryOpenFile = selectedFile.getAbsolutePath();
+
+            progressDialog = new ProgressDialog(this, "Открытие файла");
+            progressDialog.setIndeterminate(true);
+            progressDialog.setStatus("Анализ файла: " + selectedFile.getName());
+
+            Thread openThread = new Thread(() -> {
+                try {
+                    information = ExcelGrouper.selectFileAndSheet(directoryOpenFile);
+
+                    SwingUtilities.invokeLater(() -> {
+                        namesSheetExcel.clear();
+                        changeBox(useListField, FunctionExcel.readSheet(directoryOpenFile), "выберите лист");
+                        JOptionPane.showMessageDialog(CreateWindow.this,
+                                selectedFile.getName(), "Файл открыт", JOptionPane.INFORMATION_MESSAGE);
+                    });
+                } catch (IOException e) {
+                    logger.severe("Ошибка при открытии файла: " + e.getMessage());
+                    SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(CreateWindow.this,
+                                "Ошибка при открытии файла: " + e.getMessage(),
+                                "Ошибка", JOptionPane.ERROR_MESSAGE);
+                    });
+                } finally {
+                    SwingUtilities.invokeLater(() -> {
+                        if (progressDialog != null) {
+                            progressDialog.dispose();
+                        }
+                    });
+                }
+            });
+
+            openThread.start();
+            progressDialog.setVisible(true);
         }
+    }
+
+    private void readFileWithProgress(JTextArea textArea, DefaultTableModel tableModel, JTable excelTable,
+                                      JComboBox<String> title, JComboBox<String> debit,
+                                      JComboBox<String> credit, JComboBox<String> date) {
+
+        if (directoryOpenFile == null) {
+            JOptionPane.showMessageDialog(this, "Сначала откройте файл!",
+                    "Ошибка", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        if (nameOpenList == null || nameOpenList.isEmpty() || nameOpenList.equals("выберите лист")) {
+            JOptionPane.showMessageDialog(this, "Сначала выберите лист!",
+                    "Ошибка", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        // Отключаем кнопки во время чтения
+        setButtonsEnabled(false);
+
+        progressDialog = new ProgressDialog(this, "Чтение файла");
+        progressDialog.setStatus("Подготовка к чтению...");
+
+        Thread readThread = new Thread(() -> {
+            try {
+                // Очищаем старые данные в UI потоке
+                SwingUtilities.invokeLater(() -> {
+                    data.clear();
+                    textArea.setText("");
+                    tableModel.setRowCount(0);
+                    tableModel.setColumnCount(0);
+                    namesColumnsExcel.clear();
+                    namesColumnsExcel.add("Выберите столбец");
+                });
+
+                // Чтение с прогрессом
+                FunctionExcel.readWithProgress(nameOpenList, directoryOpenFile, data, progressDialog);
+
+                if (progressDialog.isCancelled()) {
+                    SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(CreateWindow.this,
+                                "Операция чтения отменена", "Отмена", JOptionPane.INFORMATION_MESSAGE);
+                    });
+                    return;
+                }
+
+                // Отображаем данные в UI потоке
+                SwingUtilities.invokeLater(() -> {
+                    if (!data.isEmpty()) {
+                        FunctionComponent.displayDataInTable(data, tableModel, excelTable);
+
+                        // Показываем в текстовой области только первые 200 строк для производительности
+                        int maxDisplay = Math.min(data.size(), 200);
+                        for (int i = 1; i <= maxDisplay; i++) {
+                            FunctionComponent.appendText(textArea, Arrays.toString(data.get("" + i)) + '\n');
+                        }
+                        if (data.size() > 200) {
+                            FunctionComponent.appendText(textArea, "\n... и еще " + (data.size() - 200) + " строк");
+                        }
+                    }
+
+                    changeBox(debit, namesColumnsExcel, "Выберите столбец");
+                    changeBox(credit, namesColumnsExcel, "Выберите столбец");
+                    changeBox(date, namesColumnsExcel, "Выберите столбец");
+                    changeBox(title, namesColumnsExcel, "Выберите столбец");
+
+                    JOptionPane.showMessageDialog(CreateWindow.this,
+                            "Загружено строк: " + data.size(), "Чтение завершено", JOptionPane.INFORMATION_MESSAGE);
+                });
+
+            } catch (Exception ex) {
+                logger.severe("Ошибка при чтении файла: " + ex.getMessage());
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(CreateWindow.this,
+                            "Ошибка при чтении файла: " + ex.getMessage(),
+                            "Ошибка", JOptionPane.ERROR_MESSAGE);
+                });
+            } finally {
+                SwingUtilities.invokeLater(() -> {
+                    if (progressDialog != null) {
+                        progressDialog.dispose();
+                    }
+                    setButtonsEnabled(true);
+                });
+            }
+        });
+
+        readThread.start();
+        progressDialog.setVisible(true);
     }
 
     private void saveFileDirectory(String nameList) {
+        if (information == null || information.rows.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Сначала сгенерируйте отчет!",
+                    "Ошибка", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ex) {
             logger.severe("Произошла ошибка: открытия окна" + ex.getMessage());
-            fileHandler.publish(new java.util.logging.LogRecord(Level.SEVERE, "Произошла ошибка: " + ex.getMessage()));
         }
 
-        final JFrame frame = new JFrame("Сохранить");
         JFileChooser chooser = FunctionComponent.getFileChooser();
-        if (chooser.showDialog(frame, "Сохранить") == JFileChooser.APPROVE_OPTION) {
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             String filePath = chooser.getSelectedFile().getAbsolutePath();
             if (!filePath.toLowerCase().endsWith(".xlsx")) {
                 filePath += ".xlsx";
             }
 
-            try {
-                ExcelGrouper.saveGroupedFileWithYears(filePath, information, "По дебету", "По кредиту", debitNumber, creditNumber);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-            FunctionExcel.saveDateInExcel(nameList, filePath, data);
-            JOptionPane.showMessageDialog(null, chooser.getSelectedFile().getName(), "Файл сохранен", JOptionPane.INFORMATION_MESSAGE);
+            // Отключаем кнопки во время сохранения
+            setButtonsEnabled(false);
+
+            progressDialog = new ProgressDialog(this, "Сохранение файла");
+            progressDialog.setIndeterminate(true);
+            progressDialog.setStatus("Сохранение отчета...");
+
+            Thread saveThread = getThread(nameList, filePath, chooser);
+
+            saveThread.start();
+            progressDialog.setVisible(true);
         }
     }
 
-//    private void analyzeWithSheetSelection() {
-//        JFileChooser chooser = new JFileChooser();
-//
-//        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-//            File file = chooser.getSelectedFile();
-//
-//            try {
-//                // МЕТОД 1: Получаем информацию о листах
-//                ExcelGrouper.ExcelData data = ExcelGrouper.selectFileAndSheet(file.getAbsolutePath());
-//
-////                // Диалог выбора листа
-////                String[] sheets = data.sheetNames.toArray(new String[0]);
-////                String selectedSheet = (String) JOptionPane.showInputDialog(
-////                        this,
-////                        "Выберите лист для обработки:",
-////                        "Выбор листа",
-////                        JOptionPane.QUESTION_MESSAGE,
-////                        null,
-////                        sheets,
-////                        sheets[0]
-////                );
-//
-////                if (selectedSheet != null) {
-////                    ExcelGrouper.selectSheetByName(data, selectedSheet);
-//
-//                    // Диалог настройки колонок
-//                    JPanel panel = new JPanel(new GridLayout(4, 2, 5, 5));
-//                    JTextField groupColField = new JTextField("0");
-//                    JTextField val1ColField = new JTextField("1");
-//                    JTextField val2ColField = new JTextField("2");
-//                    JTextField val3ColField = new JTextField("3");
-//
-//                    panel.add(new JLabel("Колонка с названиями:"));
-//                    panel.add(groupColField);
-//                    panel.add(new JLabel("Первый числовой столбец:"));
-//                    panel.add(val1ColField);
-//                    panel.add(new JLabel("Второй числовой столбец:"));
-//                    panel.add(val2ColField);
-//                    panel.add(new JLabel("Дата столбец:"));
-//                    panel.add(val3ColField);
-//
-//                    int result = JOptionPane.showConfirmDialog(this, panel,
-//                            "Настройка колонок", JOptionPane.OK_CANCEL_OPTION);
-//
-//                    if (result == JOptionPane.OK_OPTION) {
-//                        int groupCol = Integer.parseInt(groupColField.getText());
-//                        int val1Col = Integer.parseInt(val1ColField.getText());
-//                        int val2Col = Integer.parseInt(val2ColField.getText());
-//                        int val3Col = Integer.parseInt(val3ColField.getText());
-//
-//                        // МЕТОД 2: Чтение
-//                        ExcelGrouper.readSelectedSheet(file.getAbsolutePath(), data,
-//                                groupCol, val1Col, val2Col, val3Col);
-//
-//                        // МЕТОД 3: Очистка
-//                        ExcelGrouper.cleanData(data);
-//
-//                        // Сохранение
-//                        JFileChooser saveChooser = new JFileChooser();
-//                        saveChooser.setSelectedFile(new File("grouped_result.xlsx"));
-//
-//                        if (saveChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-//                            String outputPath = saveChooser.getSelectedFile().getAbsolutePath();
-//                            if (!outputPath.endsWith(".xlsx")) outputPath += ".xlsx";
-//
-//                            // МЕТОД 4: Сохранение
-//                            ExcelGrouper.saveGroupedFileWithYears(outputPath, data, "По дебету", "По кредиту", val1Col, val2Col);
-//
-//                            JOptionPane.showMessageDialog(this, "Файл сохранен!");
-//                        }
-//                    }
-//                }
-//
-//            } catch (IOException e) {
-//                JOptionPane.showMessageDialog(this, "Ошибка: " + e.getMessage());
-//            }
-//        }
-//    }
+    private Thread getThread(String nameList, String filePath, JFileChooser chooser) {
+        String finalFilePath = filePath;
+        Thread saveThread = new Thread(() -> {
+            try {
+
+                ExcelGrouper.saveGroupedFileWithYears(finalFilePath, information, "По дебету", "По кредиту", debitNumber, creditNumber);
+                FunctionExcel.saveDateInExcel(nameList, finalFilePath, data);
+
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(CreateWindow.this,
+                            "Файл успешно сохранен: " + chooser.getSelectedFile().getName(),
+                            "Сохранение завершено", JOptionPane.INFORMATION_MESSAGE);
+                });
+
+            } catch (IOException e) {
+                logger.severe("Ошибка при сохранении: " + e.getMessage());
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(CreateWindow.this,
+                            "Ошибка при сохранении: " + e.getMessage(),
+                            "Ошибка", JOptionPane.ERROR_MESSAGE);
+                });
+            } finally {
+                SwingUtilities.invokeLater(() -> {
+                    if (progressDialog != null) {
+                        progressDialog.dispose();
+                    }
+                    setButtonsEnabled(true);
+                });
+            }
+        });
+        return saveThread;
+    }
+
+    private void setButtonsEnabled(boolean enabled) {
+        // Находим все кнопки на форме и включаем/отключаем их
+        Component[] components = getContentPane().getComponents();
+        for (Component comp : components) {
+            if (comp instanceof JPanel) {
+                enableComponentsInPanel((JPanel) comp, enabled);
+            }
+        }
+    }
+
+    private void enableComponentsInPanel(JPanel panel, boolean enabled) {
+        for (Component comp : panel.getComponents()) {
+            if (comp instanceof JButton) {
+                comp.setEnabled(enabled);
+            } else if (comp instanceof JPanel) {
+                enableComponentsInPanel((JPanel) comp, enabled);
+            }
+        }
+    }
+
+    private static void changeBox(JComboBox<String> box, List<String> list, String text) {
+        SwingUtilities.invokeLater(() -> {
+            box.removeAllItems();
+            List<String> tempList = new ArrayList<>(list);
+            if (!tempList.contains(text) && !tempList.isEmpty()) {
+                tempList.addFirst(text);
+            } else if (tempList.isEmpty()) {
+                tempList.add(text);
+            }
+
+            for (String s : tempList) {
+                box.addItem(s);
+            }
+            box.setSelectedIndex(0);
+        });
+    }
 }
