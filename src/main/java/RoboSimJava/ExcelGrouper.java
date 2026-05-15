@@ -1,12 +1,14 @@
 package RoboSimJava;
 
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
-import javax.swing.*;
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.regex.Pattern;
 
 public class ExcelGrouper {
 
@@ -18,12 +20,19 @@ public class ExcelGrouper {
         private final double value1;
         private final double value2;
         private Integer year;
+        private Date fullDate;
+        private String inn;
+        private String operationName;
 
         public DataRow(String groupName, Object[] allData, double value1, double value2) {
             this.groupName = groupName;
             this.allData = allData;
             this.value1 = value1;
             this.value2 = value2;
+            this.inn = "";
+            this.operationName = "";
+            this.year = null;
+            this.fullDate = null;
         }
 
         public String getGroupName() { return groupName; }
@@ -31,13 +40,29 @@ public class ExcelGrouper {
         public double getValue1() { return value1; }
         public double getValue2() { return value2; }
         public Integer getYear() { return year; }
+        public Date getFullDate() { return fullDate; }
+        public String getInn() { return inn; }
+        public String getOperationName() { return operationName; }
+
+        public void setGroupName(String groupName) { this.groupName = groupName; }
+        public void setInn(String inn) { this.inn = inn; }
+        public void setOperationName(String operationName) { this.operationName = operationName; }
+        public void setYear(Integer year) { this.year = year; }
 
         public void setDate(Date date) {
             if (date != null) {
+                this.fullDate = date;
                 Calendar cal = Calendar.getInstance();
                 cal.setTime(date);
                 this.year = cal.get(Calendar.YEAR);
             }
+        }
+
+        public String getDisplayName() {
+            if (inn != null && !inn.isEmpty()) {
+                return groupName + " " + inn;
+            }
+            return groupName;
         }
     }
 
@@ -60,15 +85,21 @@ public class ExcelGrouper {
         public List<DataRow> getRows() { return rows; }
         public double getTotalValue() { return totalValue; }
         public int getRowCount() { return rows.size(); }
+
+        public void sortRowsByDate() {
+            rows.sort(Comparator.comparing(DataRow::getFullDate, Comparator.nullsLast(Comparator.naturalOrder())));
+        }
     }
 
     public static class DataGroup {
         private final String name;
+        private String inn;
         private final Map<Integer, YearGroup> yearGroups = new LinkedHashMap<>();
         private double totalValue;
 
         public DataGroup(String name) {
             this.name = name;
+            this.inn = "";
             this.totalValue = 0;
         }
 
@@ -78,18 +109,45 @@ public class ExcelGrouper {
                 year = 0;
             }
 
+            // Сохраняем ИНН из строки
+            if (row.getInn() != null && !row.getInn().isEmpty()) {
+                this.inn = row.getInn();
+            }
+
             YearGroup yearGroup = yearGroups.computeIfAbsent(year, YearGroup::new);
             yearGroup.addRow(row, value);
             totalValue += value;
         }
 
         public String getName() { return name; }
+        public String getInn() { return inn; }
+        public String getDisplayName() {
+            if (inn != null && !inn.isEmpty()) {
+                return name + " " + inn;
+            }
+            return name;
+        }
         public Map<Integer, YearGroup> getYearGroups() { return yearGroups; }
         public double getTotalValue() { return totalValue; }
         public int getTotalRowCount() {
             return yearGroups.values().stream().mapToInt(YearGroup::getRowCount).sum();
         }
-        public int getYearGroupCount() { return yearGroups.size(); }
+
+        public void sortYearGroups() {
+            // Сортируем года по возрастанию
+            List<Integer> sortedYears = new ArrayList<>(yearGroups.keySet());
+            sortedYears.sort(Integer::compareTo);
+            // Пересоздаем Map с сортировкой
+            Map<Integer, YearGroup> sorted = new LinkedHashMap<>();
+            for (Integer year : sortedYears) {
+                sorted.put(year, yearGroups.get(year));
+                if (year != 0) {
+                    yearGroups.get(year).sortRowsByDate();
+                }
+            }
+            yearGroups.clear();
+            yearGroups.putAll(sorted);
+        }
     }
 
     public static class ExcelData {
@@ -111,301 +169,143 @@ public class ExcelGrouper {
     public static ExcelData selectFileAndSheet(String filePath) throws IOException {
         ExcelData data = new ExcelData();
 
-        try (FileInputStream fis = new FileInputStream(filePath);
-             Workbook workbook = WorkbookFactory.create(fis)) {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new IOException("Файл не существует: " + filePath);
+        }
+
+        // Явное указание типа файла
+        Workbook workbook = null;
+        try (FileInputStream fis = new FileInputStream(file)) {
+            if (filePath.endsWith(".xlsx")) {
+                workbook = new XSSFWorkbook(fis);
+            } else if (filePath.endsWith(".xls")) {
+                workbook = new HSSFWorkbook(fis);
+            } else {
+                throw new IOException("Неподдерживаемый формат файла: " + filePath);
+            }
 
             for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
                 data.sheetNames.add(workbook.getSheetName(i));
             }
+            workbook.close();
+        } catch (Exception e) {
+            throw new IOException("Ошибка при чтении файла: " + e.getMessage(), e);
         }
+
         return data;
     }
 
-    public static void selectSheetByName(ExcelData data, String sheetName) {
-        if (data.sheetNames.contains(sheetName)) {
-            data.selectedSheetName = sheetName;
-        }
-    }
+    // ==================== МЕТОД 2: СОХРАНЕНИЕ ОТЧЕТА ====================
 
-    // ==================== МЕТОД 2: ЧТЕНИЕ ВЫБРАННОГО ЛИСТА ====================
-
-    public static void readSelectedSheet(String filePath,
-                                         ExcelData data,
-                                         int groupNameColumnIndex,
-                                         int valueColumn1Index,
-                                         int valueColumn2Index,
-                                         int dateColumnIndex) throws IOException {
-
-        data.dateColumnIndex = dateColumnIndex;
-
-        try (FileInputStream fis = new FileInputStream(filePath);
-             Workbook workbook = WorkbookFactory.create(fis)) {
-
-            Sheet sheet;
-            if (data.selectedSheetName != null) {
-                sheet = workbook.getSheet(data.selectedSheetName);
-            } else {
-                sheet = workbook.getSheetAt(0);
-                data.selectedSheetName = sheet.getSheetName();
-            }
-
-            DataFormatter formatter = new DataFormatter();
-            FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
-
-            Row firstRow = sheet.getRow(0);
-            data.totalColumns = firstRow != null ? firstRow.getLastCellNum() : 10;
-
-            boolean hasHeader = isHeaderRow(sheet.getRow(0));
-            int startRow = hasHeader ? 1 : 0;
-
-            if (hasHeader) {
-                Row headerRow = sheet.getRow(0);
-                data.headers = new Object[data.totalColumns];
-                for (int j = 0; j < data.totalColumns; j++) {
-                    Cell cell = headerRow.getCell(j);
-                    data.headers[j] = getCellValue(cell, formatter, evaluator);
-                }
-            }
-
-            for (int i = startRow; i <= sheet.getLastRowNum(); i++) {
-                Row row = sheet.getRow(i);
-                if (row == null) continue;
-
-                Cell nameCell = row.getCell(groupNameColumnIndex);
-                String groupName = getCellValueAsString(nameCell, formatter, evaluator);
-                if (groupName.trim().isEmpty()) continue;
-
-                Object[] rowData = new Object[data.totalColumns];
-                for (int j = 0; j < data.totalColumns; j++) {
-                    Cell cell = row.getCell(j);
-                    rowData[j] = getCellValue(cell, formatter, evaluator);
-                }
-
-                double value1 = getNumericValue(row.getCell(valueColumn1Index), formatter, evaluator);
-                double value2 = getNumericValue(row.getCell(valueColumn2Index), formatter, evaluator);
-
-                DataRow dataRow = new DataRow(groupName, rowData, value1, value2);
-
-                if (dateColumnIndex >= 0) {
-                    Cell dateCell = row.getCell(dateColumnIndex);
-                    Date date = getDateValue(dateCell, formatter, evaluator);
-                    dataRow.setDate(date);
-                }
-
-                data.rows.add(dataRow);
-            }
-        }
-    }
-
-    public static void readSelectedSheetWithProgress(String filePath,
-                                                     ExcelData data,
-                                                     int groupNameColumnIndex,
-                                                     int valueColumn1Index,
-                                                     int valueColumn2Index,
-                                                     int dateColumnIndex,
-                                                     ProgressDialog progressDialog) throws IOException, InterruptedException {
-
-        data.dateColumnIndex = dateColumnIndex;
-        data.rows.clear();
-
-        try (FileInputStream fis = new FileInputStream(filePath);
-             Workbook workbook = WorkbookFactory.create(fis)) {
-
-            Sheet sheet;
-            if (data.selectedSheetName != null) {
-                sheet = workbook.getSheet(data.selectedSheetName);
-            } else {
-                sheet = workbook.getSheetAt(0);
-                data.selectedSheetName = sheet.getSheetName();
-            }
-
-            DataFormatter formatter = new DataFormatter();
-            FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
-
-            Row firstRow = sheet.getRow(0);
-            data.totalColumns = firstRow != null ? firstRow.getLastCellNum() : 10;
-
-            boolean hasHeader = isHeaderRow(sheet.getRow(0));
-            int startRow = hasHeader ? 1 : 0;
-            int totalRows = sheet.getLastRowNum() - startRow + 1;
-
-            if (hasHeader) {
-                Row headerRow = sheet.getRow(0);
-                data.headers = new Object[data.totalColumns];
-                for (int j = 0; j < data.totalColumns; j++) {
-                    Cell cell = headerRow.getCell(j);
-                    data.headers[j] = getCellValue(cell, formatter, evaluator);
-                }
-            }
-
-            int processedRows = 0;
-            int lastProgress = -1;
-
-            for (int i = startRow; i <= sheet.getLastRowNum(); i++) {
-                if (progressDialog != null && progressDialog.isCancelled()) {
-                    throw new InterruptedException("Операция отменена пользователем");
-                }
-
-                Row row = sheet.getRow(i);
-                if (row == null) continue;
-
-                Cell nameCell = row.getCell(groupNameColumnIndex);
-                String groupName = getCellValueAsString(nameCell, formatter, evaluator);
-                if (groupName.trim().isEmpty()) continue;
-
-                Object[] rowData = new Object[data.totalColumns];
-                for (int j = 0; j < data.totalColumns; j++) {
-                    Cell cell = row.getCell(j);
-                    rowData[j] = getCellValue(cell, formatter, evaluator);
-                }
-
-                double value1 = getNumericValue(row.getCell(valueColumn1Index), formatter, evaluator);
-                double value2 = getNumericValue(row.getCell(valueColumn2Index), formatter, evaluator);
-
-                DataRow dataRow = new DataRow(groupName, rowData, value1, value2);
-
-                if (dateColumnIndex >= 0) {
-                    Cell dateCell = row.getCell(dateColumnIndex);
-                    Date date = getDateValue(dateCell, formatter, evaluator);
-                    dataRow.setDate(date);
-                }
-
-                data.rows.add(dataRow);
-                processedRows++;
-
-                if (progressDialog != null && processedRows % 50 == 0) {
-                    int progress = (int) ((double) processedRows / totalRows * 100);
-                    if (progress != lastProgress) {
-                        progressDialog.setProgress(Math.min(progress, 100));
-                        progressDialog.setStatus("Обработка строки " + processedRows + " из " + totalRows);
-                        lastProgress = progress;
-                    }
-                }
-            }
-
-            if (progressDialog != null && !progressDialog.isCancelled()) {
-                progressDialog.setProgress(100);
-                progressDialog.setStatus("Обработка завершена!");
-            }
-        }
-    }
-
-    // ==================== МЕТОД 3: ОЧИСТКА ДАННЫХ ====================
-
-    public static void cleanData(ExcelData data) {
-        cleanData(data, true, true, true);
-    }
-
-    public static void cleanData(ExcelData data,
-                                 boolean removeDuplicates,
-                                 boolean removeEmptyGroups,
-                                 boolean trimStrings) {
-
-        List<DataRow> cleanedRows = new ArrayList<>();
-        Set<String> seenRows = new HashSet<>();
-
-        for (DataRow row : data.rows) {
-            if (removeEmptyGroups && (row.groupName == null || row.groupName.trim().isEmpty())) {
-                continue;
-            }
-
-            if (trimStrings) {
-                row.groupName = row.groupName.trim();
-                for (int i = 0; i < row.allData.length; i++) {
-                    if (row.allData[i] instanceof String) {
-                        row.allData[i] = ((String) row.allData[i]).trim();
-                    }
-                }
-            }
-
-            if (removeDuplicates) {
-                String rowKey = row.groupName + Arrays.toString(row.allData);
-                if (!seenRows.contains(rowKey)) {
-                    seenRows.add(rowKey);
-                    cleanedRows.add(row);
-                }
-            } else {
-                cleanedRows.add(row);
-            }
-        }
-
-        data.rows = cleanedRows;
-    }
-
-    // ==================== МЕТОД 4: СОХРАНЕНИЕ ФАЙЛА С ГРУППИРОВКОЙ ПО ГОДАМ ====================
-
-    public static void saveGroupedFileWithYears(String outputFilePath,
+    public static void saveReportWithAllColumns(String outputFilePath,
                                                 ExcelData data,
                                                 String sheet1Name,
                                                 String sheet2Name,
-                                                int valueColumn1Index,
-                                                int valueColumn2Index) throws IOException {
+                                                int titleColumnIndex,
+                                                int debitColumnIndex,
+                                                int creditColumnIndex,
+                                                int dateColumnIndex,
+                                                int innColumnIndex,
+                                                int operationColumnIndex) throws IOException {
 
-        Map<String, DataGroup> groups1 = groupByColumnWithYears(data.rows, true);
-        Map<String, DataGroup> groups2 = groupByColumnWithYears(data.rows, false);
+        // Группируем данные для дебета и кредита
+        Map<String, DataGroup> groupsDebit = groupByColumnWithAllData(data.rows, true, debitColumnIndex, innColumnIndex);
+        Map<String, DataGroup> groupsCredit = groupByColumnWithAllData(data.rows, false, creditColumnIndex, innColumnIndex);
+
+        // Сортируем группы и строки по датам
+        for (DataGroup group : groupsDebit.values()) {
+            group.sortYearGroups();
+        }
+        for (DataGroup group : groupsCredit.values()) {
+            group.sortYearGroups();
+        }
 
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
 
-            createGroupedSheetWithYears(workbook,
-                    sheet1Name != null ? sheet1Name : "Столбец 1 (все)",
-                    groups1, data.headers, valueColumn1Index);
+            // Создаем лист для дебета (только ненулевые значения)
+            if (!groupsDebit.isEmpty()) {
+                createFullReportSheet(workbook,
+                        sheet1Name != null ? sheet1Name : "Отчет по дебету",
+                        groupsDebit,
+                        debitColumnIndex,
+                        dateColumnIndex,
+                        operationColumnIndex,
+                        true);
+            }
 
-            createGroupedSheetWithYears(workbook,
-                    sheet2Name != null ? sheet2Name : "Столбец 2 (без нулей)",
-                    groups2, data.headers, valueColumn2Index);
+            // Создаем лист для кредита (только ненулевые значения)
+            if (!groupsCredit.isEmpty()) {
+                createFullReportSheet(workbook,
+                        sheet2Name != null ? sheet2Name : "Отчет по кредиту",
+                        groupsCredit,
+                        creditColumnIndex,
+                        dateColumnIndex,
+                        operationColumnIndex,
+                        false);
+            }
 
             try (FileOutputStream fos = new FileOutputStream(outputFilePath)) {
                 workbook.write(fos);
             }
-
         }
     }
 
-    private static Map<String, DataGroup> groupByColumnWithYears(List<DataRow> allRows, boolean useColumn1) {
+    private static Map<String, DataGroup> groupByColumnWithAllData(List<DataRow> allRows,
+                                                                   boolean useDebit,
+                                                                   int valueColumnIndex,
+                                                                   int innColumnIndex) {
         Map<String, DataGroup> groups = new LinkedHashMap<>();
 
-        List<DataRow> sortedRows = new ArrayList<>(allRows);
-        sortedRows.sort(Comparator.comparing(DataRow::getGroupName)
-                .thenComparing(DataRow::getYear, Comparator.nullsLast(Comparator.naturalOrder())));
+        for (DataRow row : allRows) {
+            double value = useDebit ? row.getValue1() : row.getValue2();
 
-        for (DataRow row : sortedRows) {
-            double value = useColumn1 ? row.getValue1() : row.getValue2();
-
-            // Фильтруем нули для всех листов (и для дебета, и для кредита)
+            // Пропускаем нулевые значения
             if (value == 0) {
                 continue;
             }
 
-            DataGroup group = groups.computeIfAbsent(row.getGroupName(), DataGroup::new);
+            String groupKey = row.getGroupName();
+
+            DataGroup group = groups.get(groupKey);
+            if (group == null) {
+                group = new DataGroup(groupKey);
+                groups.put(groupKey, group);
+            }
             group.addRow(row, value);
         }
 
         return groups;
     }
 
-    private static void createGroupedSheetWithYears(XSSFWorkbook workbook,
-                                                    String sheetName,
-                                                    Map<String, DataGroup> groups,
-                                                    Object[] headers,
-                                                    int valueColumnIndex) {
+    private static void createFullReportSheet(XSSFWorkbook workbook,
+                                              String sheetName,
+                                              Map<String, DataGroup> groups,
+                                              int sumColumnIndex,
+                                              int dateColumnIndex,
+                                              int operationColumnIndex,
+                                              boolean isDebit) {
 
         Sheet sheet = workbook.createSheet(sheetName);
 
+        // Создаем стили
         CellStyle headerStyle = createHeaderStyle(workbook);
         CellStyle mainGroupStyle = createMainGroupHeaderStyle(workbook);
         CellStyle yearGroupStyle = createYearGroupHeaderStyle(workbook);
         CellStyle totalStyle = createTotalStyle(workbook);
         CellStyle dataStyle = createDataStyle(workbook);
+        CellStyle dateStyle = createDateStyle(workbook);
 
         int currentRow = 0;
 
-        if (headers != null) {
-            Row headerRow = sheet.createRow(currentRow++);
-            for (int i = 0; i < headers.length; i++) {
-                Cell cell = headerRow.createCell(i);
-                cell.setCellValue(headers[i] != null ? headers[i].toString() : "");
-                cell.setCellStyle(headerStyle);
-            }
+        // Создаем заголовки (только Дата, Операция, Сумма)
+        String[] headers = {"Дата", "Операция", "Сумма"};
+        Row headerRow = sheet.createRow(currentRow++);
+        for (int i = 0; i < headers.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers[i]);
+            cell.setCellStyle(headerStyle);
+            sheet.setColumnWidth(i, getColumnWidthForReport(i));
         }
 
         List<DataGroup> sortedGroups = new ArrayList<>(groups.values());
@@ -413,50 +313,76 @@ public class ExcelGrouper {
 
         for (DataGroup group : sortedGroups) {
 
+            // Заголовок группы с ИНН
             Row mainGroupRow = sheet.createRow(currentRow++);
-
             Cell nameCell = mainGroupRow.createCell(0);
-            nameCell.setCellValue(group.getName() + " (всего: " + group.getTotalRowCount() + " шт.)");
+            String displayName = group.getDisplayName();
+            nameCell.setCellValue(displayName + " (всего: " + group.getTotalRowCount() + " шт., сумма: " +
+                    String.format("%,.2f", group.getTotalValue()) + ")");
             nameCell.setCellStyle(mainGroupStyle);
-
-            Cell totalCell = mainGroupRow.createCell(valueColumnIndex);
-            totalCell.setCellValue(group.getTotalValue());
-            totalCell.setCellStyle(totalStyle);
+            sheet.addMergedRegion(new CellRangeAddress(currentRow - 1, currentRow - 1, 0, 2));
 
             int mainGroupStartRow = currentRow - 1;
 
-            List<YearGroup> sortedYearGroups = new ArrayList<>(group.getYearGroups().values());
-            sortedYearGroups.sort(Comparator.comparing(YearGroup::getYear));
+            // Сортируем года
+            List<Integer> sortedYears = new ArrayList<>(group.getYearGroups().keySet());
+            sortedYears.sort(Integer::compareTo);
 
-            for (YearGroup yearGroup : sortedYearGroups) {
+            for (Integer yearInt : sortedYears) {
+                YearGroup yearGroup = group.getYearGroups().get(yearInt);
+                if (yearGroup == null) continue;
 
+                // Заголовок года
                 Row yearGroupRow = sheet.createRow(currentRow++);
-
-                Cell yearNameCell = yearGroupRow.createCell(1);
                 String yearLabel = yearGroup.getYear() == 0 ? "Без даты" : String.valueOf(yearGroup.getYear());
-                yearNameCell.setCellValue(yearLabel + " (" + yearGroup.getRowCount() + " шт.)");
+                Cell yearNameCell = yearGroupRow.createCell(0);
+                yearNameCell.setCellValue("  " + yearLabel + " (" + yearGroup.getRowCount() + " шт., сумма: " +
+                        String.format("%,.2f", yearGroup.getTotalValue()) + ")");
                 yearNameCell.setCellStyle(yearGroupStyle);
-
-                Cell yearTotalCell = yearGroupRow.createCell(valueColumnIndex);
-                yearTotalCell.setCellValue(yearGroup.getTotalValue());
-                yearTotalCell.setCellStyle(totalStyle);
+                sheet.addMergedRegion(new CellRangeAddress(currentRow - 1, currentRow - 1, 0, 2));
 
                 int yearGroupStartRow = currentRow - 1;
                 int firstDetailRow = currentRow;
 
-                for (DataRow dataRow : yearGroup.getRows()) {
+                // Сортируем строки по дате
+                List<DataRow> sortedRows = new ArrayList<>(yearGroup.getRows());
+                sortedRows.sort(Comparator.comparing(DataRow::getFullDate, Comparator.nullsLast(Comparator.naturalOrder())));
+
+                // Детальные строки (только дата, операция, сумма)
+                for (DataRow dataRow : sortedRows) {
                     Row detailRow = sheet.createRow(currentRow++);
                     Object[] rowData = dataRow.getAllData();
 
-                    for (int i = 0; i < rowData.length; i++) {
-                        Cell cell = detailRow.createCell(i);
-                        setCellValue(cell, rowData[i]);
-                        cell.setCellStyle(dataStyle);
+                    // Столбец 0: Дата (полная дата, а не только год)
+                    String dateValue = "";
+                    if (dateColumnIndex >= 0 && dateColumnIndex < rowData.length && rowData[dateColumnIndex] != null) {
+                        dateValue = rowData[dateColumnIndex].toString();
+                    } else if (dataRow.getFullDate() != null) {
+                        SimpleDateFormat sdf = new SimpleDateFormat("dd.MM.yyyy");
+                        dateValue = sdf.format(dataRow.getFullDate());
                     }
+                    setCellValueWithStyle(detailRow.createCell(0), dateValue, dateStyle);
+
+                    // Столбец 1: Операция (полная, без обрезания)
+                    String operation = dataRow.getOperationName();
+                    if (operation == null || operation.isEmpty()) {
+                        if (operationColumnIndex >= 0 && operationColumnIndex < rowData.length && rowData[operationColumnIndex] != null) {
+                            operation = rowData[operationColumnIndex].toString();
+                        } else {
+                            operation = "";
+                        }
+                    }
+                    // Не обрезаем операцию, сохраняем полностью
+                    setCellValueWithStyle(detailRow.createCell(1), operation, dataStyle);
+
+                    // Столбец 2: Сумма
+                    double sumValue = extractValueFromRow(rowData, sumColumnIndex);
+                    setCellValueWithStyle(detailRow.createCell(2), sumValue, dataStyle);
                 }
 
                 int lastDetailRow = currentRow - 1;
 
+                // Группировка строк
                 if (lastDetailRow >= firstDetailRow) {
                     sheet.groupRow(firstDetailRow, lastDetailRow);
                     sheet.setRowGroupCollapsed(firstDetailRow, true);
@@ -476,13 +402,49 @@ public class ExcelGrouper {
             currentRow++;
         }
 
-        if (headers != null) {
-            for (int i = 0; i < headers.length; i++) {
-                sheet.autoSizeColumn(i);
-            }
-        }
-
         sheet.setRowSumsBelow(false);
+    }
+
+    // ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+
+    private static double extractValueFromRow(Object[] rowData, int columnIndex) {
+        if (columnIndex < 0 || columnIndex >= rowData.length || rowData[columnIndex] == null) {
+            return 0;
+        }
+        try {
+            if (rowData[columnIndex] instanceof Number) {
+                return ((Number) rowData[columnIndex]).doubleValue();
+            }
+            String str = rowData[columnIndex].toString().replace(",", ".").replace(" ", "").replace(" ", "");
+            if (str.isEmpty()) return 0;
+            return Double.parseDouble(str);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static void setCellValueWithStyle(Cell cell, Object value, CellStyle style) {
+        if (value == null) {
+            cell.setBlank();
+        } else if (value instanceof String) {
+            cell.setCellValue((String) value);
+        } else if (value instanceof Number) {
+            cell.setCellValue(((Number) value).doubleValue());
+        } else if (value instanceof Boolean) {
+            cell.setCellValue((Boolean) value);
+        } else {
+            cell.setCellValue(value.toString());
+        }
+        cell.setCellStyle(style);
+    }
+
+    private static int getColumnWidthForReport(int columnIndex) {
+        switch (columnIndex) {
+            case 0: return 4500;  // Дата
+            case 1: return 25000; // Операция (увеличенная ширина)
+            case 2: return 4500;  // Сумма
+            default: return 5000;
+        }
     }
 
     // ==================== СТИЛИ ====================
@@ -500,6 +462,8 @@ public class ExcelGrouper {
         style.setBorderLeft(BorderStyle.THIN);
         style.setBorderRight(BorderStyle.THIN);
         style.setAlignment(HorizontalAlignment.CENTER);
+        style.setVerticalAlignment(VerticalAlignment.CENTER);
+        style.setWrapText(true);
         return style;
     }
 
@@ -507,12 +471,17 @@ public class ExcelGrouper {
         CellStyle style = workbook.createCellStyle();
         Font font = workbook.createFont();
         font.setBold(true);
-        font.setFontHeightInPoints((short) 14);
+        font.setFontHeightInPoints((short) 13);
         font.setColor(IndexedColors.DARK_BLUE.getIndex());
         style.setFont(font);
         style.setFillForegroundColor(IndexedColors.LIGHT_ORANGE.getIndex());
         style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
         style.setBorderBottom(BorderStyle.MEDIUM);
+        style.setBorderTop(BorderStyle.THIN);
+        style.setBorderLeft(BorderStyle.THIN);
+        style.setBorderRight(BorderStyle.THIN);
+        style.setAlignment(HorizontalAlignment.LEFT);
+        style.setWrapText(true);
         return style;
     }
 
@@ -520,11 +489,15 @@ public class ExcelGrouper {
         CellStyle style = workbook.createCellStyle();
         Font font = workbook.createFont();
         font.setBold(true);
-        font.setColor(IndexedColors.BLUE.getIndex());
+        font.setColor(IndexedColors.DARK_GREEN.getIndex());
         style.setFont(font);
         style.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex());
         style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
         style.setBorderBottom(BorderStyle.THIN);
+        style.setBorderTop(BorderStyle.THIN);
+        style.setBorderLeft(BorderStyle.THIN);
+        style.setBorderRight(BorderStyle.THIN);
+        style.setAlignment(HorizontalAlignment.LEFT);
         return style;
     }
 
@@ -536,6 +509,10 @@ public class ExcelGrouper {
         style.setFillForegroundColor(IndexedColors.LIGHT_GREEN.getIndex());
         style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
         style.setAlignment(HorizontalAlignment.RIGHT);
+        style.setBorderBottom(BorderStyle.THIN);
+        style.setBorderTop(BorderStyle.THIN);
+        style.setBorderLeft(BorderStyle.THIN);
+        style.setBorderRight(BorderStyle.THIN);
         return style;
     }
 
@@ -545,125 +522,107 @@ public class ExcelGrouper {
         style.setBorderTop(BorderStyle.THIN);
         style.setBorderLeft(BorderStyle.THIN);
         style.setBorderRight(BorderStyle.THIN);
+        style.setVerticalAlignment(VerticalAlignment.CENTER);
+        style.setAlignment(HorizontalAlignment.LEFT);
+        style.setWrapText(true); // Включаем перенос текста для операций
         return style;
     }
 
-    // ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+    private static CellStyle createDateStyle(XSSFWorkbook workbook) {
+        CellStyle style = workbook.createCellStyle();
+        style.setBorderBottom(BorderStyle.THIN);
+        style.setBorderTop(BorderStyle.THIN);
+        style.setBorderLeft(BorderStyle.THIN);
+        style.setBorderRight(BorderStyle.THIN);
+        style.setVerticalAlignment(VerticalAlignment.CENTER);
+        style.setAlignment(HorizontalAlignment.CENTER);
+        return style;
+    }
 
-    private static Date getDateValue(Cell cell, DataFormatter formatter, FormulaEvaluator evaluator) {
-        if (cell == null) return null;
+    // ==================== МЕТОДЫ ДЛЯ ОБРАБОТКИ ДАННЫХ ====================
 
-        try {
-            if (cell.getCellType() == CellType.NUMERIC && DateUtil.isCellDateFormatted(cell)) {
-                return cell.getDateCellValue();
+    public static void processDataForReport(ExcelData data,
+                                            int titleColumnIndex,
+                                            int debitColumnIndex,
+                                            int creditColumnIndex,
+                                            int dateColumnIndex,
+                                            int innColumnIndex,
+                                            int operationColumnIndex) {
+        // Обогащаем данные: извлекаем ИНН и название операции в отдельные поля
+        for (DataRow row : data.rows) {
+            Object[] rowData = row.getAllData();
+
+            // Извлекаем ИНН
+            if (innColumnIndex >= 0 && innColumnIndex < rowData.length && rowData[innColumnIndex] != null) {
+                String innValue = rowData[innColumnIndex].toString();
+                row.setInn(extractInnFromData(innValue));
+            } else {
+                row.setInn("");
             }
 
-            String strValue = formatter.formatCellValue(cell, evaluator);
-            if (strValue == null || strValue.trim().isEmpty()) return null;
+            // Извлекаем название операции (полностью, без обрезания)
+            if (operationColumnIndex >= 0 && operationColumnIndex < rowData.length && rowData[operationColumnIndex] != null) {
+                row.setOperationName(rowData[operationColumnIndex].toString());
+            } else {
+                row.setOperationName("");
+            }
+        }
+    }
 
-            String[] patterns = {"dd.MM.yyyy", "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy"};
-            for (String pattern : patterns) {
-                try {
-                    SimpleDateFormat sdf = new SimpleDateFormat(pattern);
-                    return sdf.parse(strValue);
-                } catch (Exception e) {
-                    // Пробуем следующий формат
+    public static void cleanData(ExcelData data) {
+        cleanData(data, true, true, true);
+    }
+
+    public static void cleanData(ExcelData data,
+                                 boolean removeDuplicates,
+                                 boolean removeEmptyGroups,
+                                 boolean trimStrings) {
+
+        List<DataRow> cleanedRows = new ArrayList<>();
+        Set<String> seenRows = new HashSet<>();
+
+        for (DataRow row : data.rows) {
+            if (removeEmptyGroups && (row.getGroupName() == null || row.getGroupName().trim().isEmpty())) {
+                continue;
+            }
+
+            if (trimStrings) {
+                String trimmedName = row.getGroupName().trim();
+                DataRow newRow = new DataRow(trimmedName, row.getAllData(), row.getValue1(), row.getValue2());
+                newRow.setYear(row.getYear());
+                newRow.setInn(row.getInn());
+                newRow.setOperationName(row.getOperationName());
+                if (row.getFullDate() != null) {
+                    newRow.setDate(row.getFullDate());
                 }
+                row = newRow;
             }
-        } catch (Exception e) {
-            // Игнорируем
-        }
-        return null;
-    }
 
-    private static boolean isHeaderRow(Row row) {
-        if (row == null) return false;
-        Cell cell = row.getCell(0);
-        return cell != null && cell.getCellType() == CellType.STRING;
-    }
-
-    private static String getCellValueAsString(Cell cell, DataFormatter formatter, FormulaEvaluator evaluator) {
-        if (cell == null) return "";
-        return formatter.formatCellValue(cell, evaluator).trim();
-    }
-
-    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("dd.MM.yyyy");
-
-    private static Object getCellValue(Cell cell, DataFormatter formatter, FormulaEvaluator evaluator) {
-        if (cell == null) return "";
-
-        switch (cell.getCellType()) {
-            case STRING:
-                return cell.getStringCellValue();
-
-            case NUMERIC: {
-                if (DateUtil.isCellDateFormatted(cell)) {
-                    Date date = cell.getDateCellValue();
-                    return DATE_FORMAT.format(date);
+            if (removeDuplicates) {
+                String rowKey = row.getGroupName() + Arrays.toString(row.getAllData());
+                if (!seenRows.contains(rowKey)) {
+                    seenRows.add(rowKey);
+                    cleanedRows.add(row);
                 }
-                double num = cell.getNumericCellValue();
-                return num == (long) num ? (long) num : num;
+            } else {
+                cleanedRows.add(row);
             }
-            case BOOLEAN:
-                return cell.getBooleanCellValue();
-
-            case FORMULA: {
-                try {
-                    CellValue cv = evaluator.evaluate(cell);
-                    switch (cv.getCellType()) {
-                        case NUMERIC:
-                            if (DateUtil.isCellDateFormatted(cell)) {
-                                Date date = cell.getDateCellValue();
-                                return DATE_FORMAT.format(date);
-                            }
-                            double num = cv.getNumberValue();
-                            return num == (long) num ? (long) num : num;
-                        case STRING:
-                            return cv.getStringValue();
-                        case BOOLEAN:
-                            return cv.getBooleanValue();
-                        default:
-                            return cell.getCellFormula();
-                    }
-                } catch (Exception e) {
-                    return cell.getCellFormula();
-                }
-            }
-            case BLANK:
-                return "";
-
-            default:
-                return formatter.formatCellValue(cell);
         }
+
+        data.rows = cleanedRows;
     }
 
-    private static double getNumericValue(Cell cell, DataFormatter formatter, FormulaEvaluator evaluator) {
-        if (cell == null) return 0;
+    private static String extractInnFromData(String text) {
+        if (text == null || text.isEmpty()) return "";
 
-        try {
-            String str = formatter.formatCellValue(cell, evaluator);
-            if (str == null || str.trim().isEmpty()) return 0;
-            return Double.parseDouble(str.replace(",", ".").replace(" ", ""));
-        } catch (NumberFormatException e) {
-            return 0;
+        // Ищем ИНН (10 или 12 цифр)
+        Pattern pattern = Pattern.compile("\\b\\d{10}\\b|\\b\\d{12}\\b");
+        java.util.regex.Matcher matcher = pattern.matcher(text);
+
+        if (matcher.find()) {
+            return matcher.group();
         }
-    }
 
-    private static void setCellValue(Cell cell, Object value) {
-        if (value == null) {
-            cell.setBlank();
-        } else if (value instanceof String) {
-            cell.setCellValue((String) value);
-        } else if (value instanceof Number) {
-            cell.setCellValue(((Number) value).doubleValue());
-        } else if (value instanceof Boolean) {
-            cell.setCellValue((Boolean) value);
-        } else if (value instanceof Date) {
-            cell.setCellValue((Date) value);
-        } else {
-            cell.setCellValue(value.toString());
-        }
+        return text; // Если не нашли ИНН, возвращаем исходный текст
     }
-
-    
 }
