@@ -309,7 +309,7 @@ public class ExcelGrouper {
         }
 
         List<DataGroup> sortedGroups = new ArrayList<>(groups.values());
-        sortedGroups.sort(Comparator.comparing(DataGroup::getName));
+        sortedGroups.sort(Comparator.comparing(DataGroup::getTotalValue).reversed());
 
         for (DataGroup group : sortedGroups) {
 

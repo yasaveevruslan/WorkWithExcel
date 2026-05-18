@@ -52,7 +52,14 @@ public class CreateWindow extends JFrame {
     private static final Color COLOR_TEXT = new Color(44, 62, 80);
     private static final Color COLOR_LABEL = new Color(52, 73, 94);
 
+    private static final String ACCESS_PASSWORD = "12347890";
+
     public CreateWindow() {
+
+        if (!checkPassword()) {
+            System.exit(0); // Закрываем приложение, если пароль неверный
+        }
+
         initializeWindow();
         setVisible(true);
         try {
@@ -62,6 +69,122 @@ public class CreateWindow extends JFrame {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private boolean checkPassword() {
+        // Создаем панель для ввода пароля
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+
+        JLabel iconLabel = new JLabel();
+        try {
+            // Пробуем загрузить иконку для окна пароля
+            URL iconUrl = getClass().getClassLoader().getResource("app-icon.png");
+            if (iconUrl != null) {
+                ImageIcon icon = new ImageIcon(iconUrl);
+                Image scaledIcon = icon.getImage().getScaledInstance(64, 64, Image.SCALE_SMOOTH);
+                iconLabel.setIcon(new ImageIcon(scaledIcon));
+            }
+        } catch (Exception e) {
+            // Игнорируем, если иконка не найдена
+        }
+        iconLabel.setHorizontalAlignment(JLabel.CENTER);
+
+        JLabel titleLabel = new JLabel("Авторизация", JLabel.CENTER);
+        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 18));
+        titleLabel.setForeground(COLOR_PRIMARY);
+
+        JLabel messageLabel = new JLabel("Введите пароль для доступа к приложению:", JLabel.CENTER);
+        messageLabel.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+
+        JPasswordField passwordField = new JPasswordField(20);
+        passwordField.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        passwordField.setBorder(createRoundedBorder());
+
+        JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        inputPanel.add(passwordField);
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 0));
+        JButton okButton = createStyledButton("Войти", COLOR_SUCCESS, new Font("Segoe UI", Font.BOLD, 14));
+        JButton cancelButton = createStyledButton("Выход", COLOR_DANGER, new Font("Segoe UI", Font.BOLD, 14));
+        buttonPanel.add(okButton);
+        buttonPanel.add(cancelButton);
+
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.add(Box.createRigidArea(new Dimension(0, 10)));
+        panel.add(iconLabel);
+        panel.add(Box.createRigidArea(new Dimension(0, 10)));
+        panel.add(titleLabel);
+        panel.add(Box.createRigidArea(new Dimension(0, 15)));
+        panel.add(messageLabel);
+        panel.add(Box.createRigidArea(new Dimension(0, 15)));
+        panel.add(inputPanel);
+        panel.add(Box.createRigidArea(new Dimension(0, 20)));
+        panel.add(buttonPanel);
+
+        // Создаем диалоговое окно
+        final JDialog passwordDialog = new JDialog((Frame) null, "Введите пароль", true);
+        passwordDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        passwordDialog.setContentPane(panel);
+        passwordDialog.pack();
+        passwordDialog.setLocationRelativeTo(null);
+        passwordDialog.setResizable(false);
+
+        // Устанавливаем иконку для диалога
+        try {
+            URL iconUrl = getClass().getClassLoader().getResource("app-icon.png");
+            if (iconUrl != null) {
+                passwordDialog.setIconImage(new ImageIcon(iconUrl).getImage());
+            }
+        } catch (Exception e) {
+            // Игнорируем
+        }
+
+        // Массив для хранения результата
+        final boolean[] passwordCorrect = {false};
+
+        // Обработчик для кнопки OK
+        okButton.addActionListener(e -> {
+            char[] password = passwordField.getPassword();
+            String enteredPassword = new String(password);
+
+            if (ACCESS_PASSWORD.equals(enteredPassword)) {
+                passwordCorrect[0] = true;
+                passwordDialog.dispose();
+            } else {
+                // Неверный пароль
+                JOptionPane.showMessageDialog(passwordDialog,
+                        "Неверный пароль!\nДоступ запрещен.",
+                        "Ошибка авторизации",
+                        JOptionPane.ERROR_MESSAGE);
+                passwordField.setText("");
+                passwordField.requestFocus();
+
+                // Счетчик попыток (опционально)
+                // Можно добавить счетчик попыток и блокировку
+            }
+            Arrays.fill(password, '0'); // Очищаем массив с паролем
+        });
+
+        // Обработчик для кнопки Cancel
+        cancelButton.addActionListener(e -> {
+            passwordDialog.dispose();
+        });
+
+        // Обработчик закрытия окна (крестик)
+        passwordDialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                passwordDialog.dispose();
+            }
+        });
+
+        // Обработчик нажатия Enter в поле пароля
+        passwordField.addActionListener(e -> okButton.doClick());
+
+        passwordDialog.setVisible(true);
+
+        return passwordCorrect[0];
     }
 
     private void initializeWindow() {
@@ -75,7 +198,6 @@ public class CreateWindow extends JFrame {
         if (appIcon != null) {
             setIconImage(appIcon.getImage());
         } else {
-            // Если иконка не загрузилась, используем запасной вариант
             setIconImage(createFallbackIcon());
         }
 
